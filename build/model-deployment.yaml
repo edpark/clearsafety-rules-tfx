@@ -30,7 +30,7 @@ steps:
 - name: '$_CICD_IMAGE_URI'
   entrypoint: 'pytest'
   args: ['src/tests/model_deployment_tests.py::test_model_artifact']
-  dir: 'mlops-with-vertex-ai'
+  dir: 'tfdf-rules-tfx'
   env: 
   - 'PROJECT=$_PROJECT'  
   - 'REGION=$_REGION'
@@ -46,7 +46,7 @@ steps:
           '--project', '$_PROJECT',
           '--region', '$_REGION',
           '--endpoint-display-name', '$_ENDPOINT_DISPLAY_NAME']
-  dir: 'mlops-with-vertex-ai'
+  dir: 'tfdf-rules-tfx'
   id: 'Create Endpoint'
   waitFor: ['Test Model Artifact']
   
@@ -60,7 +60,7 @@ steps:
           '--endpoint-display-name', '$_ENDPOINT_DISPLAY_NAME',
           '--model-display-name', '$_MODEL_DISPLAY_NAME'
           ]
-  dir: 'mlops-with-vertex-ai'
+  dir: 'tfdf-rules-tfx'
   id: 'Deploy Model'
   waitFor: ['Create Endpoint']
   
@@ -68,7 +68,7 @@ steps:
 - name: '$_CICD_IMAGE_URI'
   entrypoint: 'pytest'
   args: ['src/tests/model_deployment_tests.py::test_model_endpoint']
-  dir: 'mlops-with-vertex-ai'
+  dir: 'tfdf-rules-tfx'
   env: 
   - 'PROJECT=$_PROJECT'  
   - 'REGION=$_REGION'
@@ -76,3 +76,5 @@ steps:
   - 'ENDPOINT_DISPLAY_NAME=$_ENDPOINT_DISPLAY_NAME'
   id: 'Test Model Endpoint'
   waitFor: ['Deploy Model']
+
+timeout: 1800s

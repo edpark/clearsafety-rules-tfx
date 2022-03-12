@@ -1,17 +1,3 @@
-# Copyright 2021 Google Inc. All Rights Reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#            http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 #############################################################################
 # CI/CD steps for Cloud Build to test and deploy a TFX pipeline to Vertex AI.
 #############################################################################
@@ -31,12 +17,9 @@ steps:
 - name: '$_CICD_IMAGE_URI'
   entrypoint: 'pytest'
   args: ['src/tests/datasource_utils_tests.py', '-s']
-  dir: 'mlops-with-vertex-ai'
+  dir: 'tfdf-rules-tfx'
   env: 
   - 'PROJECT=$_PROJECT'  
-  - 'BQ_LOCATION=$_BQ_LOCATION'
-  - 'BQ_DATASET_NAME=$_BQ_DATASET_NAME'
-  - 'BQ_TABLE_NAME=$_BQ_TABLE_NAME'  
   id: 'Unit Test Datasource Utils'
   waitFor: ['Clone Repository']
 
@@ -45,7 +28,7 @@ steps:
 - name: '$_CICD_IMAGE_URI'
   entrypoint: 'pytest'
   args: ['src/tests/model_tests.py', '-s']
-  dir: 'mlops-with-vertex-ai'
+  dir: 'tfdf-rules-tfx'
   id: 'Unit Test Model'
   waitFor: ['Clone Repository']
   timeout: 1800s
@@ -55,7 +38,7 @@ steps:
 - name: '$_CICD_IMAGE_URI'
   entrypoint: 'pytest'
   args: ['src/tests/pipeline_deployment_tests.py::test_e2e_pipeline', '-s']
-  dir: 'mlops-with-vertex-ai'
+  dir: 'tfdf-rules-tfx'
   env: 
   - 'PROJECT=$_PROJECT'  
   - 'REGION=$_REGION'
@@ -74,7 +57,7 @@ steps:
 # Build the image that encapsulates the pipeline.
 - name: 'gcr.io/cloud-builders/docker'
   args: ['build', '-t', '$_TFX_IMAGE_URI', '.']
-  dir: 'mlops-with-vertex-ai'
+  dir: 'tfdf-rules-tfx'
   id: 'Build TFX Image'
   waitFor: ['Local Test E2E Pipeline']
   
@@ -86,7 +69,7 @@ steps:
           '--mode', 'compile-pipeline',
           '--pipeline-name', '$_PIPELINE_NAME'
           ]
-  dir: 'mlops-with-vertex-ai'
+  dir: 'tfdf-rules-tfx'
   env: 
   - 'PROJECT=$_PROJECT'  
   - 'REGION=$_REGION'
@@ -96,6 +79,7 @@ steps:
   - 'TFX_IMAGE_URI=$_TFX_IMAGE_URI' 
   - 'BEAM_RUNNER=$_BEAM_RUNNER'
   - 'TRAINING_RUNNER=$_TRAINING_RUNNER'
+  - 'ENABLE_CACHE=$_ENABLE_CACHE'
   id: 'Compile Pipeline'
   waitFor: ['Local Test E2E Pipeline']
   
@@ -103,10 +87,12 @@ steps:
 # Upload compiled pipeline to GCS.
 - name: 'gcr.io/cloud-builders/gsutil'
   args: ['cp', '$_PIPELINE_NAME.json', '$_PIPELINES_STORE']
-  dir: 'mlops-with-vertex-ai'
+  dir: 'tfdf-rules-tfx'
   id:  'Upload Pipeline to GCS'
   waitFor: ['Compile Pipeline']
   
 
 # Push TFX Image to Container Registy.
 images: ['$_TFX_IMAGE_URI']
+
+timeout: 1800s

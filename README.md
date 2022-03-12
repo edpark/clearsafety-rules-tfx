@@ -1,157 +1,97 @@
-# MLOps with Vertex AI
+# Rules in TFDF
 
-This example implements the end-to-end [MLOps process](https://services.google.com/fh/files/misc/practitioners_guide_to_mlops_whitepaper.pdf) using [Vertex AI](https://cloud.google.com/vertex-ai) platform and [Smart Analytics](https://cloud.google.com/solutions/smart-analytics) technology capabilities. The example use [Keras](https://keras.io/) to implement the ML model, [TFX](https://www.tensorflow.org/tfx) to implement the training pipeline, and [Model Builder SDK](https://github.com/googleapis/python-aiplatform/tree/569d4cd03e888fde0171f7b0060695a14f99b072/google/cloud/aiplatform) to interact with Vertex AI.
+This is a fork of the end-to-end [MLOps process](https://services.google.com/fh/files/misc/practitioners_guide_to_mlops_whitepaper.pdf) as implemented in Google's [mlops-with-vertex-ai example](https://github.com/GoogleCloudPlatform/mlops-with-vertex-ai).
 
-<p align="center">
-    <img src="mlops.png" alt="MLOps lifecycle" width="400"/>
-</p>
+One significant difference is the use of Tensorflow's [Decision Forests](https://www.tensorflow.org/decision_forests) to overfit (memorize) a table of rules. More information can be found [here](https://medium.com/@shakabrah/tensorflow-tfx-and-decision-forests-on-google-vertex-ai-625c03784410).
 
 
 ## Getting started
 
-1. [Setup your MLOps environment](provision) on Google Cloud.
-2. Start your AI Notebook instance.
-3. Open the JupyterLab then open a new Terminal
-4. Clone the repository to your AI Notebook instance:
+1. Install Conda
+2. Create a new Conda environment (eg. `conda create -n tfdf-rules python=3.8`)
+3. Activate the new Conda environment: `conda activate tfdf-rules`
+4. Clone the repository:
     ```
-    git clone https://github.com/GoogleCloudPlatform/mlops-with-vertex-ai.git
-    cd mlops-with-vertex-ai
+    git clone https://github.com/edpark/tfdf-rules-tfx.git
+    cd tfdf-rules-tfx
     ```
 5. Install the required Python packages:
     ```
-    pip install tfx==1.2.0 --user
-    pip install -r requirements.txt
+    pip install -r requirements.txt --use-deprecated=legacy-resolver
     ```
-    ---
-    **NOTE**: You can ignore the pip dependencies issues. These will be fixed when upgrading to subsequent TFX version.
-    
-    ---
-6. Upgrade the `gcloud` components:
-    ```
+    NOTE: 
+    You may need to install gcc to build some of the requirements:
+    `sudo apt-get update -q && sudo apt-get install --no-install-recommends -qy gcc g++`
+6. Register this environment with the Jupyter plugin: `python -m ipykernel install --user --name=tfdf-rules`
+7. Sign up for a Google Cloud account: https://cloud.google.com/free
+8. Create a project in Google Cloud and a Cloud Storage bucket in the `us-central1` region (NOT the `Multi-region` option)
+9. Upgrade the `gcloud` components:
+   ```
    sudo apt-get install google-cloud-sdk
    gcloud components update
    ```
-
-## Dataset Management
-
-The [Chicago Taxi Trips](https://pantheon.corp.google.com/marketplace/details/city-of-chicago-public-data/chicago-taxi-trips) dataset is one of [public datasets hosted with BigQuery](https://cloud.google.com/bigquery/public-data/), which includes taxi trips from 2013 to the present, reported to the City of Chicago in its role as a regulatory agency. The task is to predict whether a given trip will result in a tip > 20%.
-
-The [01-dataset-management](01-dataset-management.ipynb) notebook covers:
-
-1. Performing exploratory data analysis on the data in `BigQuery`.
-2. Creating `Vertex AI` Dataset resource using the Python SDK.
-3. Generating the schema for the raw data using [TensorFlow Data Validation](https://www.tensorflow.org/tfx/guide/tfdv).
+10. Run through the notebooks in order (01 - 08)
 
 
-## ML Development
+## Notebook Overview
+### 01-dataset-management
+This notebook has been pared down from the original which used BigQuery to create a dataset from the taxi data.
+Sections '2. Create data for the ML task' and '3. Generate raw data schema' have been removed as they do not apply to TFDF.
 
-We experiment with creating a [Custom Model](https://cloud.google.com/ai-platform-unified/docs/training/create-model-custom-training) using [02-experimentation](02-experimentation.ipynb) notebook, which covers:
+### 02-experimentation
+Uses custom training to train a TFDF classifier.
 
-1. Preparing the data using `Dataflow`.
-2. Implementing a `Keras` classification model.
-3. Training the `Keras` model with `Vertex AI` using a [pre-built container](https://cloud.google.com/ai-platform-unified/docs/training/pre-built-containers).
-4. Upload the exported model from `Cloud Storage` to `Vertex AI`.
-5. Extract and visualize experiment parameters from [Vertex AI Metadata](https://cloud.google.com/vertex-ai/docs/ml-metadata/introduction).
-6. Use `Vertex AI` for [hyperparameter tuning](https://cloud.google.com/vertex-ai/docs/training/hyperparameter-tuning-overview).
+### 03-training-formalization
+Runs each of the TFX pipeline steps using the TFX `InteractiveContext`.
 
-We use [Vertex TensorBoard](https://cloud.google.com/vertex-ai/docs/experiments/tensorboard-overview) 
-and [Vertex ML Metadata](https://cloud.google.com/vertex-ai/docs/ml-metadata/introduction) to  track, visualize, and compare ML experiments.
+### 04-pipeline-deployment
+Tests, deploys, and runs the TFX pipeline on Vertex AI Pipelines.
 
-In addition, the training steps are formalized by implementing a [TFX pipeline](https://www.tensorflow.org/tfx).
-The [03-training-formalization](03-training-formalization.ipynb) notebook covers implementing and testing the pipeline components interactively.
+### 05-continuous-training
+Creates and uses Cloud Functions and Cloud Pub/Sub to trigger pipeline execution.
 
-## Training Operationalization
+### 06-model-deployment
+Executes a CI/CD routine to test and deploy the trained model from the previous notebook to a Vertex AI Endpoint.
 
-The [04-pipeline-deployment](04-pipeline-deployment.ipynb) notebook covers executing the CI/CD steps for the training pipeline deployment using [Cloud Build](https://cloud.google.com/build/docs/overview). The CI/CD routine is defined in the [pipeline-deployment.yaml](build/pipeline-deployment.yaml) file, and consists of the following steps:
-
-1. Clone the repository to the build environment.
-2. Run unit tests.
-3. Run a local e2e test of the `TFX` pipeline.
-4. Build the ML container image for pipeline steps.
-5. Compile the pipeline.
-6. Upload the pipeline to `Cloud Storage`.
-
-## Continuous Training
-
-After testing, compiling, and uploading the pipeline definition to `Cloud Storage`, the pipeline is executed with respect to a trigger. 
-We use [Cloud Functions](https://cloud.google.com/functions) and [Cloud Pub/Sub](https://cloud.google.com/pubsub) as a triggering mechanism.
-The `Cloud Function` listens to the `Pub/Sub` topic, and runs the training pipeline given a message sent to the `Pub/Sub` topic.
-The `Cloud Function` is implemented in [src/pipeline_triggering](src/pipeline_triggering). 
-
-The [05-continuous-training](05-continuous-training.ipynb) notebook covers:
-
-1. Creating a Cloud `Pub/Sub` topic.
-2. Deploying a `Cloud Function`.
-3. Triggering the pipeline.
-
-The end-to-end TFX training pipeline implementation is in the [src/pipelines](src/tfx_pipelines) directory, which covers the following steps:
-
-1. Receive hyper-parameters using `hyperparam_gen` custom python component.
-2. Extract data from `BigQuery` using `BigQueryExampleGen` component.
-3. Validate the raw data using `StatisticsGen` and `ExampleValidator` component.
-4. Process the data using on `Dataflow` `Transform` component.
-5. Train a custom model with `Vertex AI` using `Trainer` component.
-6. Evaluate and validate the custom model using `ModelEvaluator` component.
-7. Save the blessed to model registry location in `Cloud Storage` using `Pusher` component.
-8. Upload the model to `Vertex AI` using `vertex_model_pusher` custom python component.
+### 07-prediction-serving
+Use the deployed model for online prediction.
 
 
-## Model Deployment
+## Notes and Errata
 
-The [06-model-deployment](06-model-deployment.ipynb) notebook covers executing the CI/CD steps for the model deployment using [Cloud Build](https://cloud.google.com/build/docs/overview). The CI/CD routine is defined in [build/model-deployment.yaml](build/model-deployment.yaml)
-file, and consists of the following steps:
+1. Needed to add `custom-online-prediction@XXXXXXXX-tp.iam.gserviceaccount.com` to the list of Principals with access to the bucket being used for the pipeline runs
+otherwise a Permission denied error occurs when trying to deploy the model to an endpoint:
+```
+"custom-online-prediction@X-tp.iam.gserviceaccount.com does not have storage.objects.get access to the Google Cloud Storage object."
+E tensorflow_serving/sources/storage_path/file_system_storage_path_source.cc:365] FileSystemStoragePathSource encountered a filesystem access error: Could not find base path gs://tfdf-rules-dev/tfdf-rules/model_registry/tfdf-rules-classifier-v01 for servable tfdf-rules-classifier-v01 with error Permission denied: Error executing an HTTP request: HTTP response code 403 when reading metadata of gs://tfdf-rules-dev/tfdf-rules/model_registry/tfdf-rules-classifier-v01
+```
 
-2. Test model interface.
-3. Create an endpoint in `Vertex AI`.
-4. Deploy the model to the `endpoint`.
-5. Test the `Vertex AI` endpoint.
+2. The Evaluator component works when pipeline is run locally but encounters an error when running in Vertex AI and is disabled. There was some discussion on the forums on this issue but is still unresolved: https://discuss.tensorflow.org/t/tensorflow-decision-forests-with-tfx-model-serving-and-evaluation/2137/49
 
-## Prediction Serving
+3. A custom container was built for the Evaluator component to run on (under `build-dataflow/`) as the default one used with Beam is missing the necessary dependencies. This image is set under the `CUSTOM_DATAFLOW_IMAGE_URI` environment variable.
 
-We serve the deployed model for prediction. 
-The [07-prediction-serving](07-prediction-serving.ipynb) notebook covers:
+4. The default Tensorflow Serving image is missing the dependencies necessary to use TFDF as outlined [here](https://github.com/tensorflow/decision-forests/blob/main/documentation/tensorflow_serving.md) so the approach taken was to use a container built by the ml6team that includes the necessary Ops for TFDF: https://hub.docker.com/repository/docker/ml6team/tf-serving-tfdf. The ml6team's blog post is [here](https://blog.ml6.eu/serving-decision-forests-with-tensorflow-b447ea4fc81c). As of TFDF version 0.2.3, the team has released a Tensorflow Serving binary with the necessary TFDF Ops but I haven't figured out how to use this binary yet.
 
-1. Use the `Vertex AI` endpoint for online prediction.
-2. Use the `Vertex AI` uploaded model for batch prediction.
-3. Run the batch prediction using `Vertex Pipelines`.
+5. These were the commands necessary to run in order to create a Vertex AI service account and give it the required permissions:
+```
+$ gcloud iam service-accounts create vertex-ai --description="Vertex AI Service Acct" --display-name="vertex-ai" --project=<your project>
+$ gcloud projects add-iam-policy-binding <your project> --member="serviceAccount:vertex-ai@<your project>.iam.gserviceaccount.com" --role="roles/aiplatform.user"
+$ gsutil iam ch serviceAccount:vertex-ai@<your project>.iam.gserviceaccount.com:legacyBucketWriter gs://artifacts.<your project>.appspot.com
+$ gsutil iam ch serviceAccount:vertex-ai@<your project>.iam.gserviceaccount.com:legacyBucketWriter gs://us.artifacts.<your project>.appspot.com
+$ gsutil iam ch serviceAccount:vertex-ai@<your project>.iam.gserviceaccount.com:roles/storage.objectCreator gs://<your bucket>
+$ gsutil iam ch serviceAccount:vertex-ai@<your project>.iam.gserviceaccount.com:roles/storage.objectViewer gs://<your bucket>
+$ gsutil iam ch serviceAccount:vertex-ai@<your project>.iam.gserviceaccount.com:roles/storage.legacyObjectOwner gs://<your bucket>
+$ gsutil iam ch serviceAccount:vertex-ai@<your project>.iam.gserviceaccount.com:roles/storage.legacyBucketOwner gs://<your bucket>
+$ gcloud iam service-accounts add-iam-policy-binding vertex-ai@<your project>.iam.gserviceaccount.com --member="user:<your email>" --role="roles/iam.serviceAccountUser"
 
-## Model Monitoring
+Also:
+# Grant default service account to act as a Service Account User role on this new vertex-ai service account (https://cloud.google.com/vertex-ai/docs/pipelines/build-pipeline#before_you_begin)
+# Needs Storage Object Viewer/Creator + Storage Admin on bucket where pipeline files are being written to
+# Needs Dataflow Worker perms
+```
 
-After a model is deployed in for prediction serving, continuous monitoring is set up to ensure that the model continue to perform as expected.
-The [08-model-monitoring](08-model-monitoring.ipynb) notebook covers configuring [Vertex AI Model Monitoring](https://cloud.google.com/vertex-ai/docs/model-monitoring/overview?hl=nn) for skew and drift detection:
+## Support
 
-1. Set skew and drift threshold.
-2. Create a monitoring job for all the models under and endpoint.
-3. List the monitoring jobs.
-4. List artifacts produced by monitoring job.
-5. Pause and delete the monitoring job.
+[Discussion Forum on Github](https://github.com/edpark/tfdf-rules-tfx/discussions)
 
-
-## Metadata Tracking
-
-You can view the parameters and metrics logged by your experiments, as well as the artifacts and metadata stored by 
-your `Vertex Pipelines` in [Cloud Console](https://console.cloud.google.com/vertex-ai/metadata).
-
-## Disclaimer
-
-This is not an official Google product but sample code provided for an educational purpose.
-
----
-
-Copyright 2021 Google LLC.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at: http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
-
-
-
-
-
+[Issues on Github](https://github.com/edpark/tfdf-rules-tfx/issues)

@@ -1,18 +1,3 @@
-# Copyright 2021 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""TFX training pipeline definition."""
-
 import os
 import sys
 import logging
@@ -31,6 +16,7 @@ from tfx.dsl.experimental import latest_blessed_model_resolver
 from tfx.v1.extensions.google_cloud_big_query import BigQueryExampleGen
 from tfx.v1.extensions.google_cloud_ai_platform import Trainer as VertexTrainer 
 from tfx.v1.components import (
+    CsvExampleGen,
     StatisticsGen,
     ExampleValidator,
     Transform,
@@ -55,71 +41,28 @@ TRAIN_MODULE_FILE = "src/model_training/runner.py"
 
 def create_pipeline(
     pipeline_root: str,
-    num_epochs: data_types.RuntimeParameter,
-    batch_size: data_types.RuntimeParameter,
-    learning_rate: data_types.RuntimeParameter,
-    hidden_units: data_types.RuntimeParameter,
     metadata_connection_config: metadata_store_pb2.ConnectionConfig = None,
 ):
+    logging.info(f"create_pipeline - pipeline_root: {pipeline_root}, metadata_connection_config: {metadata_connection_config}")
 
     # Hyperparameter generation.
-    hyperparams_gen = custom_components.hyperparameters_gen(
-        num_epochs=num_epochs,
-        batch_size=batch_size,
-        learning_rate=learning_rate,
-        hidden_units=hidden_units,
-    ).with_id("HyperparamsGen")
-
-    # Get train source query.
-    train_sql_query = datasource_utils.get_training_source_query(
-        config.PROJECT,
-        config.REGION,
-        config.DATASET_DISPLAY_NAME,
-        ml_use="UNASSIGNED",
-        limit=int(config.TRAIN_LIMIT),
-    )
-
-    train_output_config = example_gen_pb2.Output(
-        split_config=example_gen_pb2.SplitConfig(
-            splits=[
-                example_gen_pb2.SplitConfig.Split(
-                    name="train", hash_buckets=int(config.NUM_TRAIN_SPLITS)
-                ),
-                example_gen_pb2.SplitConfig.Split(
-                    name="eval", hash_buckets=int(config.NUM_EVAL_SPLITS)
-                ),
-            ]
-        )
-    )
+    # hyperparams_gen = custom_components.hyperparameters_gen(
+    #     num_epochs=num_epochs,
+    #     batch_size=batch_size,
+    #     learning_rate=learning_rate,
+    #     hidden_units=hidden_units,
+    # ).with_id("HyperparamsGen")
 
     # Train example generation.
-    train_example_gen = BigQueryExampleGen(
-        query=train_sql_query,
-        output_config=train_output_config,
+    input_config = example_gen_pb2.Input(splits=[
+        example_gen_pb2.Input.Split(name='train', pattern='*'),
+        example_gen_pb2.Input.Split(name='eval', pattern='*')
+    ])
+
+    train_example_gen = CsvExampleGen(
+        input_base=datasource_utils.get_training_csv_source(config.GCS_LOCATION),
+        input_config=input_config
     ).with_id("TrainDataGen")
-
-    # Get test source query.
-    test_sql_query = datasource_utils.get_training_source_query(
-        config.PROJECT,
-        config.REGION,
-        config.DATASET_DISPLAY_NAME,
-        ml_use="TEST",
-        limit=int(config.TEST_LIMIT),
-    )
-
-    test_output_config = example_gen_pb2.Output(
-        split_config=example_gen_pb2.SplitConfig(
-            splits=[
-                example_gen_pb2.SplitConfig.Split(name="test", hash_buckets=1),
-            ]
-        )
-    )
-
-    # Test example generation.
-    test_example_gen = BigQueryExampleGen(
-        query=test_sql_query,
-        output_config=test_output_config,
-    ).with_id("TestDataGen")
 
     # Schema importer.
     schema_importer = Importer(
@@ -166,7 +109,6 @@ def create_pipeline(
         schema=schema_importer.outputs["result"],
         base_model=warmstart_model_resolver.outputs["latest_model"],
         transform_graph=transform.outputs["transform_graph"],
-        hyperparameters=hyperparams_gen.outputs["hyperparameters"],
     ).with_id("ModelTrainer")
     
     if config.TRAINING_RUNNER == "vertex":
@@ -176,7 +118,6 @@ def create_pipeline(
             schema=schema_importer.outputs["result"],
             base_model=warmstart_model_resolver.outputs["latest_model"],
             transform_graph=transform.outputs["transform_graph"],
-            hyperparameters=hyperparams_gen.outputs["hyperparameters"],
             custom_config=config.VERTEX_TRAINING_CONFIG
         ).with_id("ModelTrainer")
         
@@ -224,14 +165,17 @@ def create_pipeline(
     )
 
     # Model evaluation.
+    logging.info(f"trainer.outputs: {trainer.outputs}, baseline_model_resolver.outputs: {baseline_model_resolver.outputs}")
     evaluator = Evaluator(
-        examples=test_example_gen.outputs["examples"],
-        example_splits=["test"],
+        examples=train_example_gen.outputs["examples"],
+        example_splits=["train"],
         model=trainer.outputs["model"],
         baseline_model=baseline_model_resolver.outputs["model"],
         eval_config=eval_config,
         schema=schema_importer.outputs["result"],
     ).with_id("ModelEvaluator")
+    if int(config.USE_EVALUATOR):
+        evaluator = evaluator.with_beam_pipeline_args(config.BEAM_DATAFLOW_PIPELINE_ARGS + ["--sdk_location=container", "--experiments=use_runner_v2", f"--sdk_container_image={config.CUSTOM_DATAFLOW_IMAGE_URI}"])
 
     exported_model_location = os.path.join(
         config.MODEL_REGISTRY_URI, config.MODEL_DISPLAY_NAME
@@ -245,7 +189,7 @@ def create_pipeline(
     # Push custom model to model registry.
     pusher = Pusher(
         model=trainer.outputs["model"],
-        model_blessing=evaluator.outputs["blessing"],
+        # model_blessing=evaluator.outputs["blessing"],
         push_destination=push_destination,
     ).with_id("ModelPusher")
     
@@ -264,15 +208,13 @@ def create_pipeline(
         model_display_name=config.MODEL_DISPLAY_NAME,
         pushed_model_location=exported_model_location,
         serving_image_uri=config.SERVING_IMAGE_URI,
-        model_blessing=evaluator.outputs["blessing"],
+        # model_blessing=evaluator.outputs["blessing"],
         explanation_config=explanation_config,
         labels=labels
     ).with_id("VertexUploader")
 
     pipeline_components = [
-        hyperparams_gen,
         train_example_gen,
-        test_example_gen,
         statistics_gen,
         schema_importer,
         example_validator,
@@ -280,9 +222,11 @@ def create_pipeline(
         warmstart_model_resolver,
         trainer,
         baseline_model_resolver,
-        evaluator,
         pusher,
     ]
+
+    if int(config.USE_EVALUATOR):
+        pipeline_components.append(evaluator)
 
     if int(config.UPLOAD_MODEL):
         pipeline_components.append(vertex_model_uploader)
@@ -305,5 +249,5 @@ def create_pipeline(
         components=pipeline_components,
         beam_pipeline_args=beam_pipeline_args,
         metadata_connection_config=metadata_connection_config,
-        enable_cache=int(config.ENABLE_CACHE),
+        enable_cache=int(config.ENABLE_CACHE)
     )

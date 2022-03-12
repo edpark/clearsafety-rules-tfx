@@ -1,18 +1,4 @@
-# Copyright 2021 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""Test training pipeline using local runner."""
-
+import pytest
 import sys
 import os
 from tfx.orchestration.local.local_dag_runner import LocalDagRunner
@@ -30,19 +16,20 @@ handler.setLevel(logging.INFO)
 root.addHandler(handler)
 
 MLMD_SQLLITE = "mlmd.sqllite"
-NUM_EPOCHS = 1
-BATCH_SIZE = 512
-LEARNING_RATE = 0.001
-HIDDEN_UNITS = "128,128"
 
 
 def test_e2e_pipeline():
+
+    if not tf.io.gfile.exists("data/data.csv"):
+        logging.info("data/data.csv doesn't exist - exiting")
+        return
 
     project = os.getenv("PROJECT")
     region = os.getenv("REGION")
     model_display_name = os.getenv("MODEL_DISPLAY_NAME")
     dataset_display_name = os.getenv("DATASET_DISPLAY_NAME")
     gcs_location = os.getenv("GCS_LOCATION")
+    gcs_data_location = os.path.join(os.getenv("GCS_LOCATION"), "data", "data.csv")
     model_registry = os.getenv("MODEL_REGISTRY_URI")
     upload_model = os.getenv("UPLOAD_MODEL")
 
@@ -66,19 +53,21 @@ def test_e2e_pipeline():
     metadata_connection_config.sqlite.connection_mode = 3
     logging.info("ML metadata store is ready.")
 
+    logging.info(f"gcs_data_location: {gcs_data_location}")
+    if tf.io.gfile.exists(gcs_data_location):
+        tf.io.gfile.remove(gcs_data_location)
+    tf.io.gfile.copy("data/data.csv", gcs_data_location)
+
     pipeline_root = os.path.join(
         config.ARTIFACT_STORE_URI,
         config.PIPELINE_NAME,
     )
+    logging.info(f"pipeline_root: {pipeline_root}")
 
     runner = LocalDagRunner()
 
     pipeline = training_pipeline.create_pipeline(
         pipeline_root=pipeline_root,
-        num_epochs=NUM_EPOCHS,
-        batch_size=BATCH_SIZE,
-        learning_rate=LEARNING_RATE,
-        hidden_units=HIDDEN_UNITS,
         metadata_connection_config=metadata_connection_config,
     )
 

@@ -1,97 +1,100 @@
-# Copyright 2021 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""Train and evaluate the model."""
-
 import logging
 import tensorflow as tf
 import tensorflow_transform as tft
+
+from src.common import features
+
 from tensorflow import keras
 
+from typing import List
+from tfx import v1 as tfx
+from tfx_bsl.public import tfxio
+from tensorflow_metadata.proto.v0 import schema_pb2
 
-from src.model_training import data, model
+
+from src.model_training import data, model_tfdf
 
 
 def train(
-    train_data_dir,
-    eval_data_dir,
-    tft_output_dir,
-    hyperparams,
-    log_dir,
-    base_model_dir=None,
+    fn_args=None,
+    csv_data_dir=None
 ):
 
-    logging.info(f"Loading tft output from {tft_output_dir}")
-    tft_output = tft.TFTransformOutput(tft_output_dir)
-    transformed_feature_spec = tft_output.transformed_feature_spec()
+    if csv_data_dir:
+        train_dataset = data.get_csv_dataset(csv_data_dir)
+        eval_dataset = data.get_csv_dataset(csv_data_dir)
+    else:
+        tf_transform_output = tft.TFTransformOutput(fn_args.transform_output)
+        schema = tf_transform_output.transformed_metadata.schema
+        
+        train_dataset = _input_fn(
+            fn_args.train_files,
+            fn_args.data_accessor,
+            schema,
+            features.TARGET_FEATURE_NAME,
+            batch_size=1)
 
-    train_dataset = data.get_dataset(
-        train_data_dir,
-        transformed_feature_spec,
-        hyperparams["batch_size"],
-    )
+        eval_dataset = _input_fn(
+            fn_args.eval_files,
+            fn_args.data_accessor,
+            schema,
+            features.TARGET_FEATURE_NAME,
+            batch_size=1)
 
-    eval_dataset = data.get_dataset(
-        eval_data_dir,
-        transformed_feature_spec,
-        hyperparams["batch_size"],
-    )
-
-    optimizer = keras.optimizers.Adam(learning_rate=hyperparams["learning_rate"])
-    loss = keras.losses.BinaryCrossentropy(from_logits=True)
-    metrics = [keras.metrics.BinaryAccuracy(name="accuracy")]
-
-    early_stopping = tf.keras.callbacks.EarlyStopping(
-        monitor="val_loss", patience=5, restore_best_weights=True
-    )
-    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir)
-
-    classifier = model.create_binary_classifier(tft_output, hyperparams)
-    if base_model_dir:
+    decision_forest = model_tfdf.create_decision_forest()
+    if fn_args and fn_args.base_model:
         try:
-            classifier = keras.load_model(base_model_dir)
+            decision_forest = keras.load_model(fn_args.base_model)
         except:
             pass
 
-    classifier.compile(optimizer=optimizer, loss=loss, metrics=metrics)
-
     logging.info("Model training started...")
-    classifier.fit(
+    decision_forest.fit(
         train_dataset,
-        epochs=hyperparams["num_epochs"],
         validation_data=eval_dataset,
-        callbacks=[early_stopping, tensorboard_callback],
     )
     logging.info("Model training completed.")
 
-    return classifier
+    return decision_forest
 
 
-def evaluate(model, data_dir, raw_schema_location, tft_output_dir, hyperparams):
-    logging.info(f"Loading raw schema from {raw_schema_location}")
-
-    logging.info(f"Loading tft output from {tft_output_dir}")
-    tft_output = tft.TFTransformOutput(tft_output_dir)
-    transformed_feature_spec = tft_output.transformed_feature_spec()
-
+def evaluate(model, eval_data_dir):
+    
     logging.info("Model evaluation started...")
-    eval_dataset = data.get_dataset(
-        data_dir,
-        transformed_feature_spec,
-        hyperparams["batch_size"],
+    eval_dataset = data.get_csv_dataset(
+        eval_data_dir,
     )
 
     evaluation_metrics = model.evaluate(eval_dataset)
     logging.info("Model evaluation completed.")
 
     return evaluation_metrics
+
+
+def _input_fn(file_pattern: List[str],
+              data_accessor: tfx.components.DataAccessor,
+              schema: schema_pb2.Schema,
+              label: str,
+              batch_size: int = 200) -> tf.data.Dataset:
+  """Generates features and label for tuning/training.
+
+  Args:
+    file_pattern: List of paths or patterns of input tfrecord files.
+    data_accessor: DataAccessor for converting input to RecordBatch.
+    schema: A schema proto of input data.
+    label: Name of the label.
+    batch_size: representing the number of consecutive elements of returned
+      dataset to combine in a single batch
+
+  Returns:
+    A dataset that contains (features, indices) tuple where features is a
+      dictionary of Tensors, and indices is a single Tensor of label indices.
+  """
+  return data_accessor.tf_dataset_factory(
+      file_pattern,
+      tfxio.TensorFlowDatasetOptions(
+        batch_size=batch_size, 
+        label_key=label, 
+        num_epochs=1, 
+        shuffle=False),
+      schema)

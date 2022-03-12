@@ -1,8 +1,8 @@
-FROM gcr.io/tfx-oss-public/tfx:1.2.0
+FROM gcr.io/tfx-oss-public/tfx:1.6.1
 
 COPY requirements.txt requirements.txt
 
-RUN pip install -r requirements.txt
+RUN pip install -r requirements.txt --use-deprecated=legacy-resolver
 
 COPY src/ src/
 

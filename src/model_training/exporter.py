@@ -1,33 +1,14 @@
-# Copyright 2021 Google LLC
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-"""Functions for exporting the model for serving."""
-
 import logging
 
 import tensorflow as tf
-import tensorflow_transform as tft
 import tensorflow_data_validation as tfdv
 from tensorflow_transform.tf_metadata import schema_utils
-import tensorflow.keras as keras
 
 from src.common import features
 
 
-def _get_serve_tf_examples_fn(classifier, tft_output, raw_feature_spec):
+def _get_serve_tf_examples_fn(trained_model, raw_feature_spec):
     """Returns a function that parses a serialized tf.Example and applies TFT."""
-
-    classifier.tft_layer = tft_output.transform_features_layer()
 
     @tf.function
     def serve_tf_examples_fn(serialized_tf_examples):
@@ -38,43 +19,31 @@ def _get_serve_tf_examples_fn(classifier, tft_output, raw_feature_spec):
 
         parsed_features = tf.io.parse_example(serialized_tf_examples, raw_feature_spec)
 
-        transformed_features = classifier.tft_layer(parsed_features)
-        logits = classifier(transformed_features)
-        probabilities = keras.activations.sigmoid(logits)
-        return {"probabilities": probabilities}
+        outputs = trained_model(parsed_features)
+        return {"outputs": outputs}
 
     return serve_tf_examples_fn
 
 
-def _get_serve_features_fn(classifier, tft_output):
+def _get_serve_features_fn(trained_model):
     """Returns a function that accept a dictionary of features and applies TFT."""
-
-    classifier.tft_layer = tft_output.transform_features_layer()
 
     @tf.function
     def serve_features_fn(raw_features):
         """Returns the output to be used in the serving signature."""
 
-        transformed_features = classifier.tft_layer(raw_features)
-        logits = classifier(transformed_features)
-        neg_probabilities = keras.activations.sigmoid(logits)
-        pos_probabilities = 1 - neg_probabilities
-        probabilities = tf.concat([neg_probabilities, pos_probabilities], -1)
-        batch_size = tf.shape(probabilities)[0]
-        classes = tf.repeat([features.TARGET_LABELS], [batch_size], axis=0)
-        return {"classes": classes, "scores": probabilities}
+        outputs = trained_model(raw_features)
+        return {"outputs": outputs}
 
     return serve_features_fn
 
 
 def export_serving_model(
-    classifier, serving_model_dir, raw_schema_location, tft_output_dir
+    trained_model, serving_model_dir, raw_schema_location
 ):
 
     raw_schema = tfdv.load_schema_text(raw_schema_location)
     raw_feature_spec = schema_utils.schema_as_feature_spec(raw_schema).feature_spec
-
-    tft_output = tft.TFTransformOutput(tft_output_dir)
 
     features_input_signature = {
         feature_name: tf.TensorSpec(
@@ -86,15 +55,15 @@ def export_serving_model(
 
     signatures = {
         "serving_default": _get_serve_features_fn(
-            classifier, tft_output
+            trained_model
         ).get_concrete_function(features_input_signature),
         "serving_tf_example": _get_serve_tf_examples_fn(
-            classifier, tft_output, raw_feature_spec
+            trained_model, raw_feature_spec
         ).get_concrete_function(
             tf.TensorSpec(shape=[None], dtype=tf.string, name="examples")
         ),
     }
 
     logging.info("Model export started...")
-    classifier.save(serving_model_dir, signatures=signatures)
+    trained_model.save(serving_model_dir, signatures=signatures)
     logging.info("Model export completed.")

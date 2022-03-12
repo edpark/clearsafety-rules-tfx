@@ -79,25 +79,26 @@ def vertex_model_uploader(
     model_display_name: Parameter[str],
     pushed_model_location: Parameter[str],
     serving_image_uri: Parameter[str],
-    model_blessing: InputArtifact[ModelBlessing],
+    # model_blessing: InputArtifact[ModelBlessing],
     uploaded_model: OutputArtifact[UploadedModel],
     explanation_config: Parameter[str]="",
     labels: Parameter[str]="",
 ):
+    logging.info(f"model_display_name: {model_display_name}, pushed_model_location: {pushed_model_location}, serving_image_uri: {serving_image_uri}")
 
     vertex_ai.init(project=project, location=region)
     
-    blessing = artifact_utils.get_single_instance([model_blessing])
-    if not model_utils.is_model_blessed(blessing):
-        logging.info(f"Model is not uploaded to Vertex AI because it was not blessed by the evaluator.")
-        uploaded_model.set_int_custom_property("uploaded", 0)
-        return
+    # blessing = artifact_utils.get_single_instance([model_blessing])
+    # if not model_utils.is_model_blessed(blessing):
+    #     logging.info(f"Model is not uploaded to Vertex AI because it was not blessed by the evaluator.")
+    #     uploaded_model.set_int_custom_property("uploaded", 0)
+    #     return
 
     pushed_model_dir = os.path.join(
         pushed_model_location, tf.io.gfile.listdir(pushed_model_location)[-1]
     )
 
-    logging.info(f"Model registry location: {pushed_model_dir}")
+    logging.info(f"pushed_model_dir: {pushed_model_dir}")
 
     try:
         explanation_config = json.loads(explanation_config)
@@ -117,15 +118,26 @@ def vertex_model_uploader(
     except:
         labels = None
 
+    logging.info(f'labels: {labels}')
+    serving_container_environment_variables = {
+        'MODEL_BASE_PATH': 'gs://tfdf-rules-dev/tfdf-rules/model_registry',  # TODO: un-hardcode
+        'MODEL_NAME': model_display_name,
+    }
+    logging.info(f'serving_container_environment_variables: {serving_container_environment_variables}')
+
     vertex_model = vertex_ai.Model.upload(
         display_name=model_display_name,
         artifact_uri=pushed_model_dir,
         serving_container_image_uri=serving_image_uri,
+        serving_container_environment_variables=serving_container_environment_variables,
+        serving_container_predict_route=f'/v1/models/{model_display_name}:predict',
+        serving_container_health_route=f'/v1/models/{model_display_name}',
+        serving_container_args=['--port=5000', '--rest_api_port=8080'],
         parameters_schema_uri=None,
         instance_schema_uri=None,
-        explanation_metadata=explanation_metadata,
-        explanation_parameters=explanation_parameters,
-        labels=labels
+        # explanation_metadata=explanation_metadata,
+        # explanation_parameters=explanation_parameters,
+        # labels=labels
     )
 
     model_uri = vertex_model.gca_resource.name
